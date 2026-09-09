@@ -81,14 +81,16 @@ async function requestPlan(task) {
 }
 
 async function afterAction(task, message = "页面已更新，正在继续分析…") {
-  const before = await getTask();
-  if (!before || before.id !== task.id || turnStopped(before.status)) return;
-  task.steps = (task.steps || 0) + 1;
-  task.status = "acting";
-  task.lastMessage = message;
-  task.updatedAt = Date.now();
-  await saveTask(task);
-  await tellChat(task, "acting", message);
+  // 点击可能刚刚打开了新标签页。始终以存储中的最新任务为准，不能用调用方的旧对象
+  // 把 tabs.onCreated 已写入的新 targetTabId 覆盖回去。
+  const current = await getTask();
+  if (!current || current.id !== task.id || turnStopped(current.status)) return;
+  current.steps = (current.steps || 0) + 1;
+  current.status = "acting";
+  current.lastMessage = message;
+  current.updatedAt = Date.now();
+  await saveTask(current);
+  await tellChat(current, "acting", message);
   await sleep(800);
   const latest = await getTask();
   if (!latest || latest.id !== task.id || turnStopped(latest.status)) return;
@@ -99,6 +101,48 @@ async function afterAction(task, message = "页面已更新，正在继续分析
     return;
   }
   await requestPlan(latest);
+}
+
+async function recoverPageConnection(task) {
+  let latest = await getTask();
+  if (!latest || latest.id !== task.id || turnStopped(latest.status)) return;
+  latest.status = "reconnecting";
+  latest.lastMessage = "目标网页正在跳转，浏览器助手正在自动重新连接…";
+  latest.updatedAt = Date.now();
+  await saveTask(latest);
+  await tellChat(latest, "acting", latest.lastMessage);
+
+  for (const delay of [400, 800, 1400, 2200, 3200]) {
+    await sleep(delay);
+    latest = await getTask();
+    if (!latest || latest.id !== task.id || turnStopped(latest.status)) return;
+    let tab;
+    try { tab = await chrome.tabs.get(latest.targetTabId); } catch (_) { continue; }
+    if (!/^https?:/i.test(tab.url || "")) {
+      latest.status = "needs_user";
+      latest.lastMessage = `当前页面 ${tab.url || ""} 受 Chrome 限制，无法自动操作。请打开普通网站页面后说“继续”。`;
+      await saveTask(latest);
+      return tellChat(latest, "needs_user", latest.lastMessage, true, { sourceUrl: tab.url || "" });
+    }
+    if (tab.status === "loading") continue;
+    try {
+      await chrome.scripting.executeScript({ target: { tabId: latest.targetTabId }, files: ["content/browser-agent.js"] });
+      const probe = await chrome.tabs.sendMessage(latest.targetTabId, { type: "QYK_BROWSER_INSPECT" });
+      if (!probe?.url) continue;
+      latest.status = "acting";
+      latest.lastMessage = "已重新连接网页，正在根据最新页面继续分析…";
+      latest.updatedAt = Date.now();
+      await saveTask(latest);
+      await tellChat(latest, "acting", latest.lastMessage);
+      return requestPlan(latest); // 页面可能已经变化，丢弃旧动作并重新规划，避免点错元素。
+    } catch (_) {}
+  }
+  latest = await getTask();
+  if (!latest || latest.id !== task.id || turnStopped(latest.status)) return;
+  latest.status = "needs_user";
+  latest.lastMessage = "暂时无法连接目标网页。请切到目标页确认页面已加载完成或完成登录/验证，然后回到聊天发送“继续”。";
+  await saveTask(latest);
+  return tellChat(latest, "needs_user", latest.lastMessage, true, { sourceUrl: latest.pageUrl || "" });
 }
 
 async function applyPlan(task, plan) {
@@ -188,7 +232,7 @@ async function applyPlan(task, plan) {
   try {
     result = await chrome.tabs.sendMessage(task.targetTabId, { type: "QYK_BROWSER_EXECUTE", action });
   } catch (_) {
-    throw new Error("无法连接当前网页，请等待页面加载后重试");
+    return recoverPageConnection(task);
   }
   if (result?.requiresUser) {
     task.status = "needs_user";

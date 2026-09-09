@@ -9,7 +9,7 @@
 - `打开官网查找最近 10 天最热门的内容，列出来源链接`
 - 完成第一次查询后继续说：`只看公务舱`、`改成后天`、`下载 PDF`
 
-> 当前版本：**v0.7.0**。它修复了重复下载问题，并会在插件不是最新版时提醒更新。
+> 当前版本：**v0.8.0**。它修复了重复下载和网页跳转后偶发断连的问题，并会在插件不是最新版时提醒更新。
 
 ## 一、安装前准备
 
@@ -18,7 +18,7 @@
 - 一台 Windows 或 macOS 电脑；
 - Google Chrome 浏览器；
 - 能正常打开 [ai.qykaiwu.cn](https://ai.qykaiwu.cn/)；
-- 插件压缩包。可从 [GitHub Releases](https://github.com/pruida/qyk-browser-assistant/releases/latest) 下载最新版，也可以使用 [官网下载链接](https://ai.qykaiwu.cn/static/qyk-browser-assistant-v0.7.zip)。
+- 插件压缩包。可从 [GitHub Releases](https://github.com/pruida/qyk-browser-assistant/releases/latest) 下载最新版，也可以使用 [官网下载链接](https://ai.qykaiwu.cn/static/qyk-browser-assistant-v0.8.zip)。
 
 手机 Chrome 暂不支持这种安装方式。
 
@@ -26,7 +26,7 @@
 
 ### 第 1 步：下载并解压
 
-1. 下载 `qyk-browser-assistant-v0.7.zip`。
+1. 下载 `qyk-browser-assistant-v0.8.zip`。
 2. 找到下载的 ZIP 文件。
 3. Windows：右键文件，选择“全部解压”。
 4. macOS：双击 ZIP 文件即可解压。
@@ -46,7 +46,7 @@
 
 1. 点击左上角“加载已解压的扩展程序”。
 2. 选择刚才解压的文件夹。
-3. 页面出现“启源浏览器助手”，并显示版本 `0.7.0`，表示安装成功。
+3. 页面出现“启源浏览器助手”，并显示版本 `0.8.0`，表示安装成功。
 4. 建议点击浏览器右上角拼图图标，把“启源浏览器助手”固定在工具栏。
 
 [观看 28 秒安装教学视频](https://ai.qykaiwu.cn/static/qyk-browser-extension-install-v0.7.mp4)
