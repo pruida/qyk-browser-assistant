@@ -22,7 +22,7 @@
     const selector = "a,button,input,textarea,select,[role=button],[role=link],[role=option],[contenteditable=true],[tabindex]";
     const rows = [];
     for (const el of document.querySelectorAll(selector)) {
-      if (!visible(el) || rows.length >= 120) continue;
+      if (!visible(el) || rows.length >= 100) continue;
       const r = el.getBoundingClientRect();
       const row = {
         id: elementId(el), tag: el.tagName.toLowerCase(), role: el.getAttribute("role") || "",
@@ -37,7 +37,7 @@
     }
     return {
       url: location.href, title: document.title,
-      text: clean(document.body?.innerText).slice(0, 8000), elements: rows,
+      text: clean(document.body?.innerText).slice(0, 6500), elements: rows,
       viewport: { width: innerWidth, height: innerHeight, scrollY: Math.round(scrollY), pageHeight: document.documentElement.scrollHeight }
     };
   }

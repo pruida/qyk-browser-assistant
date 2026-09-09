@@ -1,10 +1,23 @@
 const TASK_KEY = "activeTask";
-const MAX_STEPS = 16;
+const SESSIONS_KEY = "browserSessions";
+const MAX_STEPS = 12;
 const planningTaskIds = new Set();
 const applyingPlanIds = new Set();
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const getTask = async () => (await chrome.storage.local.get(TASK_KEY))[TASK_KEY] || null;
-const saveTask = task => chrome.storage.local.set({ [TASK_KEY]: task });
+const getConversationTask = async conversationId => {
+  const stored = await chrome.storage.local.get([TASK_KEY, SESSIONS_KEY]);
+  const active = stored[TASK_KEY] || null;
+  return (stored[SESSIONS_KEY] || {})[conversationId] ||
+    (active?.conversationId === conversationId ? active : null);
+};
+const saveTask = async task => {
+  const stored = await chrome.storage.local.get(SESSIONS_KEY);
+  const sessions = stored[SESSIONS_KEY] || {};
+  if (task?.conversationId) sessions[task.conversationId] = task;
+  const keep = Object.entries(sessions).sort((a, b) => (b[1]?.updatedAt || 0) - (a[1]?.updatedAt || 0)).slice(0, 24);
+  await chrome.storage.local.set({ [TASK_KEY]: task, [SESSIONS_KEY]: Object.fromEntries(keep) });
+};
 const quickHash = value => {
   let hash = 2166136261;
   for (const ch of String(value || "")) { hash ^= ch.codePointAt(0); hash = Math.imul(hash, 16777619); }
@@ -26,6 +39,25 @@ const browserIntent = text => {
     /(?:打开|访问|进入|浏览|操作|点击|填写|上传|下载|登录|注册|预订|订票|订房|下单|购买|比价|搜索|搜一下|查一下|查询).{0,24}(?:网站|网页|官网|页面|携程|淘宝|天猫|京东|百度|知乎|微博|航班|酒店|商品|订单)/.test(t) ||
     /(?:在|用).{0,18}(?:网站|官网|携程|淘宝|天猫|京东|百度|知乎|微博).{0,18}(?:找|查|搜|买|订|填|打开|操作)/.test(t) ||
     /帮我.{0,30}(?:打开|查|搜|买|订|定|填|登录|下载|上传)/.test(t);
+};
+const exhaustiveGoal = text => /(?:所有|全部|尽可能完整|尽可能多|\ball\b|\bevery\b)/i.test(String(text || ""));
+const fastListGoal = text => /(?:热门|热度|Top|排行|列表|合集|汇总)/i.test(String(text || ""));
+const mdText = value => String(value || "").replace(/[\[\]*_`]/g, "").trim();
+const finishCollectedList = async task => {
+  const items = (task.memory || []).slice(0, 10);
+  const lines = items.map((item, index) => {
+    const title = mdText(item.title || `结果 ${index + 1}`);
+    const url = /^https?:\/\//i.test(String(item.url || "")) ? String(item.url) : "";
+    const head = `${index + 1}. ${url ? `[${title}](${url})` : title}`;
+    const details = [item.popularity && `热度：${mdText(item.popularity)}`, item.evidence && `依据：${mdText(item.evidence)}`,
+      item.reproducible && `Demo/开源：${mdText(item.reproducible)}`].filter(Boolean);
+    return head + (details.length ? `\n   - ${details.join("；")}` : "");
+  });
+  task.status = "search_complete";
+  task.lastMessage = `已从当前可访问页面收集并整理 ${items.length} 个高相关结果：\n\n${lines.join("\n\n")}\n\n以上按页面可见热度证据整理；请打开来源链接核对实时数据。`;
+  task.updatedAt = Date.now();
+  await saveTask(task);
+  return tellChat(task, "search_complete", task.lastMessage, true, { result: task.lastMessage, sourceUrl: task.pageUrl || "" });
 };
 
 async function tellChat(task, status, message, activate = false, extra = {}) {
@@ -84,8 +116,8 @@ async function requestPlan(task) {
       await saveTask(task);
       return tellChat(task, task.status, task.lastMessage, true);
     }
-    const exhaustive = /(?:所有|全部|尽可能完整|尽可能多|\ball\b|\bevery\b)/i.test(String(task.goal || ""));
-    const researchEnough = !exhaustive && (task.memory || []).length >= 10 && (task.steps || 0) >= 6;
+    const exhaustive = exhaustiveGoal(task.goal);
+    const researchEnough = !exhaustive && (task.memory || []).length >= 8 && (task.steps || 0) >= 4;
     task.forceFinalize = (task.steps || 0) >= MAX_STEPS - 1 || researchEnough;
     task.status = "inspecting";
     task.planId = crypto.randomUUID();
@@ -226,7 +258,10 @@ async function applyPlan(task, plan) {
     const key = String(item.url || item.id || item.title || JSON.stringify(item)).slice(0, 1000);
     if (!memory.some(x => String(x.url || x.id || x.title || JSON.stringify(x)).slice(0, 1000) === key)) memory.push(item);
   }
-  task.memory = memory.slice(-24);
+  task.memory = memory.slice(-20);
+  if (!exhaustiveGoal(task.goal) && fastListGoal(task.goal) && task.memory.length >= 8 && (task.steps || 0) >= 2) {
+    return finishCollectedList(task); // 结构化账本已足够，省掉通常最慢的最终 GPT 汇总调用。
+  }
   const status = String(plan.status || "continue");
   const message = String(plan.message || plan.result || "浏览器任务状态已更新。").slice(0, 12000);
   if (status === "done") {
@@ -335,8 +370,8 @@ async function applyPlan(task, plan) {
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   (async () => {
     if (msg?.type === "QYK_CHAT_MESSAGE") {
-      const old = await getTask();
       const conversationId = String(msg.conversationId || "");
+      const old = await getConversationTask(conversationId);
       const sameChat = old && old.conversationId === conversationId && old.sourceTabId === sender.tab?.id && !isTerminal(old.status);
       const text = String(msg.text || "").trim();
       if (sameChat && /^(?:取消|停止|结束|不做了|算了)(?:浏览器|这个任务|操作)?/.test(text)) {
@@ -402,8 +437,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     }
     if (msg?.type === "QYK_GET_TASK") return sendResponse({ task: await getTask() });
     if (msg?.type === "QYK_GET_CHAT_TASK") {
-      const task = await getTask();
       const conversationId = String(msg.conversationId || "");
+      const task = await getConversationTask(conversationId);
       if (!task || task.conversationId !== conversationId || isTerminal(task.status)) return sendResponse({ task: null });
       task.sourceTabId = sender.tab?.id;
       task.sourceUrl = sender.tab?.url || task.sourceUrl;

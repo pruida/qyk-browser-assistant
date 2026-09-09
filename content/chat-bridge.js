@@ -1,7 +1,7 @@
 (() => {
   if (window.__qykBrowserBridge) return;
   window.__qykBrowserBridge = true;
-  const EXT_VERSION = "0.13.0";
+  const EXT_VERSION = "0.14.0";
   let last = "", lastAt = 0;
 
   const versionLt = (a, b) => {
@@ -84,6 +84,17 @@
     const result = await submit(d.text, d.requestId, d.conversationId);
     document.dispatchEvent(new CustomEvent("qyk-browser-command-result", {
       detail: { requestId: d.requestId, ...result }
+    }));
+  });
+
+  // 查询“当前会话是否曾由浏览器助手接管”，让不带搜索关键词的追问也能延续原任务。
+  document.addEventListener("qyk-browser-context-check", async e => {
+    const d = e.detail || {};
+    const result = await chrome.runtime.sendMessage({
+      type: "QYK_GET_CHAT_TASK", conversationId: String(d.conversationId || "")
+    }).catch(() => ({ task: null }));
+    document.dispatchEvent(new CustomEvent("qyk-browser-context-result", {
+      detail: { requestId: d.requestId, active: !!result?.task }
     }));
   });
 
