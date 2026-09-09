@@ -36,9 +36,9 @@ const turnStopped = status => ["search_complete", "needs_user", "cancelled", "er
 const browserIntent = text => {
   const t = String(text || "").trim();
   return /https?:\/\//i.test(t) ||
-    /(?:打开|访问|进入|浏览|操作|点击|填写|上传|下载|登录|注册|预订|订票|订房|下单|购买|比价|搜索|搜一下|查一下|查询).{0,24}(?:网站|网页|官网|页面|携程|淘宝|天猫|京东|百度|知乎|微博|航班|酒店|商品|订单)/.test(t) ||
-    /(?:在|用).{0,18}(?:网站|官网|携程|淘宝|天猫|京东|百度|知乎|微博).{0,18}(?:找|查|搜|买|订|填|打开|操作)/.test(t) ||
-    /帮我.{0,30}(?:打开|查|搜|买|订|定|填|登录|下载|上传)/.test(t);
+    /(?:打开|访问|进入|浏览|操作|点击|填写|上传|下载|登录|注册|预订|订票|订房|下单|购买|比价|搜索|搜一下|查一下|查询|查找|检索|查看|看看|看下).{0,40}(?:网站|网页|官网|页面|站点|论坛|社区|博客|新闻|帖子|文章|动态|携程|淘宝|天猫|京东|百度|知乎|微博|航班|酒店|商品|订单)/.test(t) ||
+    /(?:在|用).{0,24}(?:网站|官网|站点|论坛|社区|博客|携程|淘宝|天猫|京东|百度|知乎|微博).{0,24}(?:找|查|搜|看|买|订|填|打开|操作)/.test(t) ||
+    /帮我.{0,40}(?:打开|查看|看看|看下|查找|检索|查|搜|买|订|定|填|登录|下载|上传)/.test(t);
 };
 const exhaustiveGoal = text => /(?:所有|全部|尽可能完整|尽可能多|\ball\b|\bevery\b)/i.test(String(text || ""));
 const fastListGoal = text => /(?:热门|热度|Top|排行|列表|合集|汇总)/i.test(String(text || ""));
@@ -369,6 +369,11 @@ async function applyPlan(task, plan) {
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   (async () => {
+    if (msg?.type === "QYK_BROWSER_SHOULD_HANDLE") {
+      const conversationId = String(msg.conversationId || "");
+      const old = await getConversationTask(conversationId);
+      return sendResponse({ candidate: !!(old && !isTerminal(old.status)) || browserIntent(msg.text) });
+    }
     if (msg?.type === "QYK_CHAT_MESSAGE") {
       const conversationId = String(msg.conversationId || "");
       const old = await getConversationTask(conversationId);

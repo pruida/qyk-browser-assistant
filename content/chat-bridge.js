@@ -1,7 +1,7 @@
 (() => {
   if (window.__qykBrowserBridge) return;
   window.__qykBrowserBridge = true;
-  const EXT_VERSION = "0.14.0";
+  const EXT_VERSION = "0.15.0";
   let last = "", lastAt = 0;
 
   const versionLt = (a, b) => {
@@ -59,6 +59,12 @@
     text = String(text || "").trim();
     if (!text || (text === last && Date.now() - lastAt < 400 && !requestId)) return { accepted: false };
     last = text; lastAt = Date.now();
+    // 聊天页不再独占意图判断：每条消息先由插件结合该会话上下文做本地轻量判断。
+    const check = await chrome.runtime.sendMessage({
+      type: "QYK_BROWSER_SHOULD_HANDLE", text,
+      conversationId: conversationId || location.hash.replace(/^#/, "")
+    }).catch(() => ({ candidate: false }));
+    if (!check?.candidate) return { accepted: false, candidate: false };
     // 每次真正启动浏览器任务前都从服务器重新取版本；这样聊天页长期不刷新也能发现新版本。
     const release = await latestRelease();
     if (release && versionLt(EXT_VERSION, release.version)) {
