@@ -146,7 +146,24 @@ async function recoverPageConnection(task) {
 }
 
 async function applyPlan(task, plan) {
-  if (!plan || typeof plan !== "object") throw new Error("规划结果无效");
+  if (!plan || typeof plan !== "object") {
+    task.planFailures = (task.planFailures || 0) + 1;
+    if (task.planFailures <= 2) {
+      task.status = "acting";
+      task.lastMessage = `规划服务暂时没有返回有效结果，正在自动重试（${task.planFailures}/2）…`;
+      await saveTask(task);
+      await tellChat(task, "acting", task.lastMessage);
+      await sleep(900 * task.planFailures);
+      const retryTask = await getTask();
+      if (!retryTask || retryTask.id !== task.id || turnStopped(retryTask.status)) return;
+      return requestPlan(retryTask);
+    }
+    task.status = "needs_user";
+    task.lastMessage = "规划服务暂时不可用，本轮已暂停且不会重复执行。请稍后发送“继续”重试。";
+    await saveTask(task);
+    return tellChat(task, "needs_user", task.lastMessage, true);
+  }
+  task.planFailures = 0;
   const additions = Array.isArray(plan.memory_append) ? plan.memory_append.slice(0, 20) : [];
   const memory = Array.isArray(task.memory) ? task.memory : [];
   for (const item of additions) {
@@ -284,6 +301,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         actionHistory: sameChat ? (old.actionHistory || []) : [],
         downloadKeys: [],
         pendingFilename: "",
+        planFailures: 0,
         targetTabId: sameChat ? (old.targetTabId || old.ctripTabId) : undefined,
         updatedAt: Date.now()
       };
