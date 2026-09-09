@@ -86,6 +86,7 @@ async function afterAction(task, message = "页面已更新，正在继续分析
   const current = await getTask();
   if (!current || current.id !== task.id || turnStopped(current.status)) return;
   current.steps = (current.steps || 0) + 1;
+  current.actionFailures = 0;
   current.status = "acting";
   current.lastMessage = message;
   current.updatedAt = Date.now();
@@ -145,6 +146,30 @@ async function recoverPageConnection(task) {
   return tellChat(latest, "needs_user", latest.lastMessage, true, { sourceUrl: latest.pageUrl || "" });
 }
 
+async function recoverActionFailure(task, reason) {
+  let latest = await getTask();
+  if (!latest || latest.id !== task.id || turnStopped(latest.status)) return;
+  latest.actionFailures = (latest.actionFailures || 0) + 1;
+  const history = latest.actionHistory || [];
+  if (history.length) history[history.length - 1].outcome = `失败：${String(reason || "页面状态已变化").slice(0, 300)}`;
+  latest.actionHistory = history;
+  latest.steps = (latest.steps || 0) + 1;
+  if (latest.actionFailures >= 3) {
+    latest.status = "needs_user";
+    latest.lastMessage = `网页连续 ${latest.actionFailures} 次拒绝操作，本轮已安全暂停。请检查是否需要登录或验证，然后发送“继续”。`;
+    await saveTask(latest);
+    return tellChat(latest, "needs_user", latest.lastMessage, true, { sourceUrl: latest.pageUrl || "" });
+  }
+  latest.status = "acting";
+  latest.lastMessage = `当前操作不可用（${String(reason || "页面已变化").slice(0, 120)}），正在读取最新页面并改用其他路径…`;
+  await saveTask(latest);
+  await tellChat(latest, "acting", latest.lastMessage);
+  await sleep(700);
+  latest = await getTask();
+  if (!latest || latest.id !== task.id || turnStopped(latest.status)) return;
+  return requestPlan(latest);
+}
+
 async function applyPlan(task, plan) {
   if (!plan || typeof plan !== "object") {
     task.planFailures = (task.planFailures || 0) + 1;
@@ -189,7 +214,7 @@ async function applyPlan(task, plan) {
   const action = plan.action || {};
   const type = String(action.type || "");
   const signature = JSON.stringify([task.pageUrl || "", type, action.url || "", action.elementId || "", action.text || action.value || action.key || ""]);
-  if (["navigate", "click", "fill", "select", "press", "download"].includes(type) &&
+  if (["navigate", "click", "fill", "select", "press", "back", "download"].includes(type) &&
       (task.actionHistory || []).some(x => x.taskId === task.id && x.signature === signature)) {
     task.status = "needs_user";
     task.lastMessage = "已拦截同一页面上的重复操作，避免重复下载或重复提交。请检查当前页面后继续。";
@@ -229,6 +254,7 @@ async function applyPlan(task, plan) {
     task.status = "navigating";
     task.lastMessage = message || `正在打开 ${url.hostname}…`;
     task.steps = (task.steps || 0) + 1;
+    task.actionFailures = 0;
     await saveTask(task);
     await tellChat(task, "navigating", task.lastMessage);
     await chrome.tabs.update(task.targetTabId, { url: url.href, active: true });
@@ -238,7 +264,13 @@ async function applyPlan(task, plan) {
     task.status = "navigating";
     task.steps = (task.steps || 0) + 1;
     await saveTask(task);
-    await chrome.tabs.goBack(task.targetTabId);
+    try {
+      await chrome.tabs.goBack(task.targetTabId);
+      task.actionFailures = 0;
+      await saveTask(task);
+    } catch (e) {
+      return recoverActionFailure(task, e?.message || "当前标签页没有可后退的历史页面");
+    }
     return;
   }
   let result;
@@ -257,7 +289,7 @@ async function applyPlan(task, plan) {
     await saveTask(task);
     return tellChat(task, "needs_user", task.lastMessage, true, { sourceUrl: task.pageUrl || "" });
   }
-  if (!result?.ok) throw new Error(result?.error || "网页动作执行失败");
+  if (!result?.ok) return recoverActionFailure(task, result?.error || "网页动作执行失败");
   if (result.downloadStarted) {
     task.status = "search_complete";
     task.lastMessage = `已开始下载${result.filename ? `“${result.filename}”` : "文件"}，本轮操作已结束，不会重复下载。`;
@@ -302,6 +334,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         downloadKeys: [],
         pendingFilename: "",
         planFailures: 0,
+        actionFailures: 0,
         targetTabId: sameChat ? (old.targetTabId || old.ctripTabId) : undefined,
         updatedAt: Date.now()
       };
