@@ -1,8 +1,15 @@
 const TASK_KEY = "activeTask";
-const MAX_STEPS = 60;
+const MAX_STEPS = 30;
+const planningTaskIds = new Set();
+const applyingPlanIds = new Set();
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const getTask = async () => (await chrome.storage.local.get(TASK_KEY))[TASK_KEY] || null;
 const saveTask = task => chrome.storage.local.set({ [TASK_KEY]: task });
+const quickHash = value => {
+  let hash = 2166136261;
+  for (const ch of String(value || "")) { hash ^= ch.codePointAt(0); hash = Math.imul(hash, 16777619); }
+  return (hash >>> 0).toString(36);
+};
 const safeFilename = (name, url = "") => {
   let value = String(name || "").split(/[\\/]/).pop().replace(/[<>:"|?*\u0000-\u001f]/g, "_").trim();
   if (!value) {
@@ -53,31 +60,52 @@ async function pageState(task) {
       page = { url: tab.url || "", title: tab.title || "", text: "页面脚本尚未就绪", elements: [], viewport: {} };
     }
   }
+  // DOM 足够时走快速模式；只在页面几乎读不到内容时启用视觉截图。
   let screenshot = "";
-  try {
+  const needsVision = String(page?.text || "").length < 240 || (page?.elements || []).length < 2;
+  if (needsVision) try {
     await chrome.tabs.update(task.targetTabId, { active: true });
-    screenshot = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "jpeg", quality: 68 });
+    screenshot = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "jpeg", quality: 58 });
   } catch (_) {}
   return { ...page, screenshot };
 }
 
 async function requestPlan(task) {
-  if (turnStopped(task.status)) return;
-  if ((task.steps || 0) >= MAX_STEPS) {
-    task.status = "needs_user";
-    task.lastMessage = `已执行 ${MAX_STEPS} 步，为避免失控已暂停。请补充更具体的要求后继续。`;
+  if (planningTaskIds.has(task.id)) return;
+  planningTaskIds.add(task.id);
+  try {
+    const current = await getTask();
+    if (!current || current.id !== task.id || turnStopped(current.status)) return;
+    if (["inspecting", "planning"].includes(current.status) && Date.now() - (current.planRequestedAt || 0) < 90000) return;
+    task = current;
+    if ((task.steps || 0) >= MAX_STEPS) {
+      task.status = "needs_user";
+      task.lastMessage = `已执行 ${MAX_STEPS} 步，为避免失控已暂停。请补充更具体的要求后继续。`;
+      await saveTask(task);
+      return tellChat(task, task.status, task.lastMessage, true);
+    }
+    task.forceFinalize = (task.steps || 0) >= MAX_STEPS - 1;
+    task.status = "inspecting";
+    task.planId = crypto.randomUUID();
+    task.planRequestedAt = Date.now();
     await saveTask(task);
-    return tellChat(task, task.status, task.lastMessage, true);
+    const page = await pageState(task);
+    const latest = await getTask();
+    if (!latest || latest.id !== task.id || latest.planId !== task.planId || turnStopped(latest.status)) return;
+    latest.status = "planning";
+    latest.pageUrl = page.url;
+    latest.pageFingerprint = quickHash(JSON.stringify([
+      page.url, page.title, String(page.text || "").slice(0, 8000),
+      (page.elements || []).slice(0, 120).map(x => [x.tag, x.label, x.href, x.value]), page.viewport?.scrollY
+    ]));
+    latest.updatedAt = Date.now();
+    await saveTask(latest);
+    await tellChat(latest, "planning_required", page.screenshot ? "GPT-6 正在视觉分析当前网页…" : "GPT-6 正在快速读取当前网页…", false, {
+      planId: latest.planId, page: { ...page, screenshot: undefined }, screenshot: page.screenshot || ""
+    });
+  } finally {
+    planningTaskIds.delete(task.id);
   }
-  task.forceFinalize = (task.steps || 0) >= MAX_STEPS - 1;
-  const page = await pageState(task);
-  task.status = "planning";
-  task.pageUrl = page.url;
-  task.updatedAt = Date.now();
-  await saveTask(task);
-  await tellChat(task, "planning_required", "GPT-6 正在根据当前页面规划下一步…", false, {
-    page: { ...page, screenshot: undefined }, screenshot: page.screenshot || ""
-  });
 }
 
 async function afterAction(task, message = "页面已更新，正在继续分析…") {
@@ -92,7 +120,7 @@ async function afterAction(task, message = "页面已更新，正在继续分析
   current.updatedAt = Date.now();
   await saveTask(current);
   await tellChat(current, "acting", message);
-  await sleep(800);
+  await sleep(250);
   const latest = await getTask();
   if (!latest || latest.id !== task.id || turnStopped(latest.status)) return;
   const tab = await chrome.tabs.get(latest.targetTabId);
@@ -196,7 +224,7 @@ async function applyPlan(task, plan) {
     const key = String(item.url || item.id || item.title || JSON.stringify(item)).slice(0, 1000);
     if (!memory.some(x => String(x.url || x.id || x.title || JSON.stringify(x)).slice(0, 1000) === key)) memory.push(item);
   }
-  task.memory = memory.slice(-60);
+  task.memory = memory.slice(-40);
   const status = String(plan.status || "continue");
   const message = String(plan.message || plan.result || "浏览器任务状态已更新。").slice(0, 12000);
   if (status === "done") {
@@ -213,13 +241,16 @@ async function applyPlan(task, plan) {
   }
   const action = plan.action || {};
   const type = String(action.type || "");
-  const signature = JSON.stringify([task.pageUrl || "", type, action.url || "", action.elementId || "", action.text || action.value || action.key || ""]);
+  const signature = JSON.stringify([task.pageFingerprint || task.pageUrl || "", type, action.url || "", action.elementId || "", action.text || action.value || action.key || ""]);
   if (["navigate", "click", "fill", "select", "press", "back", "download"].includes(type) &&
       (task.actionHistory || []).some(x => x.taskId === task.id && x.signature === signature)) {
-    task.status = "needs_user";
-    task.lastMessage = "已拦截同一页面上的重复操作，避免重复下载或重复提交。请检查当前页面后继续。";
-    await saveTask(task);
-    return tellChat(task, "needs_user", task.lastMessage, true, { sourceUrl: task.pageUrl || "" });
+    if (type === "download") {
+      task.status = "needs_user";
+      task.lastMessage = "已阻止同一文件的重复下载。";
+      await saveTask(task);
+      return tellChat(task, "needs_user", task.lastMessage, true, { sourceUrl: task.pageUrl || "" });
+    }
+    return recoverActionFailure(task, "页面内容没有变化，已跳过模型给出的重复动作");
   }
   task.actionHistory = [...(task.actionHistory || []), {
     step: task.steps || 0, pageUrl: task.pageUrl || "", type,
@@ -345,18 +376,27 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       return sendResponse({ accepted: true, task });
     }
     if (msg?.type === "QYK_BROWSER_PLAN_RESULT") {
-      const task = await getTask();
-      if (!task || msg.taskId !== task.id) return sendResponse({ ok: false });
+      const initial = await getTask();
+      const planId = msg.planId || initial?.planId; // 兼容更新前已打开、尚未刷新的聊天页。
+      if (!initial || msg.taskId !== initial.id || planId !== initial.planId || initial.status !== "planning" || applyingPlanIds.has(planId)) {
+        return sendResponse({ ok: false, stale: true });
+      }
+      applyingPlanIds.add(planId);
       try {
+        initial.status = "applying";
+        await saveTask(initial); // 在执行前落锁，重复/过期规划结果即使同时返回也不会被执行。
+        const task = initial;
         await applyPlan(task, msg.plan);
         return sendResponse({ ok: true });
       } catch (e) {
+        const task = await getTask();
+        if (!task || task.id !== initial.id) return sendResponse({ ok: false, stale: true });
         task.status = "error";
         task.lastMessage = `浏览器操作暂停：${e.message || e}`;
         await saveTask(task);
         await tellChat(task, "error", task.lastMessage, true);
         return sendResponse({ ok: false, error: task.lastMessage });
-      }
+      } finally { applyingPlanIds.delete(planId); }
     }
     if (msg?.type === "QYK_GET_TASK") return sendResponse({ task: await getTask() });
     if (msg?.type === "QYK_GET_CHAT_TASK") {

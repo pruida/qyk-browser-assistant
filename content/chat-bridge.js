@@ -67,9 +67,9 @@
   const conversationId = location.hash.replace(/^#/, "");
   chrome.runtime.sendMessage({ type: "QYK_GET_CHAT_TASK", conversationId }).then(r => {
     document.dispatchEvent(new CustomEvent("qyk-browser-ready", {
-      detail: { version: "0.10.0", activeTask: !!r?.task }
+      detail: { version: "0.11.0", activeTask: !!r?.task }
     }));
   }).catch(() => {
-    document.dispatchEvent(new CustomEvent("qyk-browser-ready", { detail: { version: "0.10.0", activeTask: false } }));
+    document.dispatchEvent(new CustomEvent("qyk-browser-ready", { detail: { version: "0.11.0", activeTask: false } }));
   });
 })();
