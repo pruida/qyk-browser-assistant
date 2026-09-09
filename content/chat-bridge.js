@@ -1,8 +1,9 @@
 (() => {
   if (window.__qykBrowserBridge) return;
   window.__qykBrowserBridge = true;
-  const EXT_VERSION = "0.15.0";
+  const EXT_VERSION = "0.16.0";
   let last = "", lastAt = 0;
+  let progressTimer = 0, progressStarted = 0, progressMessage = "", progressStatus = "", progressHidden = false;
 
   const versionLt = (a, b) => {
     const x = String(a || "").split(".").map(n => parseInt(n, 10) || 0);
@@ -41,16 +42,43 @@
     const close = document.createElement("button");
     close.textContent = "×";
     Object.assign(close.style, { position: "absolute", right: "9px", top: "6px", border: "0", background: "none", color: "#fff", fontSize: "20px", cursor: "pointer" });
-    close.onclick = () => { el.style.display = "none"; };
+    close.onclick = () => { progressHidden = true; el.style.display = "none"; };
     el.appendChild(close);
     document.documentElement.appendChild(el);
     return el;
   }
 
-  function show(message, status) {
+  const terminalStatus = status => ["search_complete", "needs_user", "error", "done", "cancelled"].includes(status);
+  function progressLabel(message, status, elapsed) {
+    const phase = {
+      ready: "正在打开目标网页", navigating: "正在等待网页加载", inspecting: "正在读取页面内容",
+      planning_required: "正在等待 GPT-6 分析并返回下一步", planning: "正在等待 GPT-6 分析并返回下一步",
+      acting: "正在执行网页操作", reconnecting: "网页跳转中，正在重新连接", downloading: "正在等待下载开始"
+    }[status] || message || "正在处理浏览器任务";
+    const dots = ".".repeat((elapsed % 3) + 1);
+    return elapsed >= 20 ? `${phase}${dots} 已等待 ${elapsed} 秒，仍在处理，并非卡死` : `${phase}${dots} ${elapsed} 秒`;
+  }
+  function paintProgress() {
+    if (progressHidden) return;
     const el = panel();
     let text = el.querySelector("span");
     if (!text) { text = document.createElement("span"); el.insertBefore(text, el.firstChild); }
+    const elapsed = Math.max(0, Math.floor((Date.now() - progressStarted) / 1000));
+    text.textContent = `⏳ ${progressLabel(progressMessage, progressStatus, elapsed)}`;
+    el.style.display = "block";
+  }
+  function show(message, status) {
+    progressHidden = false;
+    const el = panel();
+    let text = el.querySelector("span");
+    if (!text) { text = document.createElement("span"); el.insertBefore(text, el.firstChild); }
+    clearInterval(progressTimer); progressTimer = 0;
+    if (!terminalStatus(status) && status !== "accepted") {
+      progressStarted = Date.now(); progressMessage = message || ""; progressStatus = status || "";
+      paintProgress();
+      progressTimer = setInterval(paintProgress, 1000);
+      return;
+    }
     text.textContent = `${status === "error" ? "⚠️" : "✈️"} ${message}`;
     el.style.display = "block";
   }

@@ -42,6 +42,11 @@ const browserIntent = text => {
 };
 const exhaustiveGoal = text => /(?:所有|全部|尽可能完整|尽可能多|\ball\b|\bevery\b)/i.test(String(text || ""));
 const fastListGoal = text => /(?:热门|热度|Top|排行|列表|合集|汇总)/i.test(String(text || ""));
+const initialUrlFor = text => {
+  const direct = String(text || "").match(/https?:\/\/[^\s，。；]+/i)?.[0];
+  if (direct) return direct;
+  return browserIntent(text) ? `https://www.bing.com/search?q=${encodeURIComponent(String(text || "").slice(0, 500))}` : "about:blank";
+};
 const mdText = value => String(value || "").replace(/[\[\]*_`]/g, "").trim();
 const finishCollectedList = async task => {
   const items = (task.memory || []).slice(0, 10);
@@ -70,9 +75,18 @@ async function ensureTarget(task) {
   if (task.targetTabId) {
     try { await chrome.tabs.get(task.targetTabId); return task.targetTabId; } catch (_) {}
   }
-  const tab = await chrome.tabs.create({ url: "about:blank", active: true });
+  const startUrl = initialUrlFor(task.instruction || task.goal);
+  const tab = await chrome.tabs.create({ url: startUrl, active: true });
   task.targetTabId = tab.id;
+  if (startUrl !== "about:blank") task.status = "navigating";
   await saveTask(task);
+  if (task.status === "navigating") setTimeout(async () => {
+    try {
+      const latest = await getTask();
+      const currentTab = latest?.targetTabId ? await chrome.tabs.get(latest.targetTabId) : null;
+      if (latest?.id === task.id && latest.status === "navigating" && currentTab?.status === "complete") await requestPlan(latest);
+    } catch (_) {}
+  }, 300); // 防止极快页面在任务状态落盘前已经触发 complete，导致漏掉首次规划。
   return tab.id;
 }
 
@@ -414,7 +428,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       await saveTask(task);
       await ensureTarget(task);
       await tellChat(task, "ready", "通用浏览器助手已接管，正在理解任务…");
-      await requestPlan(task);
+      if (task.status !== "navigating") await requestPlan(task);
       return sendResponse({ accepted: true, task });
     }
     if (msg?.type === "QYK_BROWSER_PLAN_RESULT") {
