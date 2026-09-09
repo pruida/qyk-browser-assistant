@@ -1,0 +1,32 @@
+{
+  "manifest_version": 3,
+  "name": "启源浏览器助手",
+  "version": "0.7.0",
+  "description": "让 ai.qykaiwu.cn 在用户授权下通过 GPT-6 协助操作各类网站，并在关键步骤前交还控制。",
+  "permissions": ["tabs", "storage", "alarms", "activeTab", "scripting", "downloads"],
+  "host_permissions": [
+    "https://ai.qykaiwu.cn/*",
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "启源浏览器助手",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://ai.qykaiwu.cn/*"],
+      "js": ["content/chat-bridge.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "exclude_matches": ["https://ai.qykaiwu.cn/*"],
+      "js": ["content/browser-agent.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
