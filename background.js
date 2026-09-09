@@ -3,6 +3,7 @@ const SESSIONS_KEY = "browserSessions";
 const MAX_STEPS = 12;
 const planningTaskIds = new Set();
 const applyingPlanIds = new Set();
+const navigationWatchIds = new Set();
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const getTask = async () => (await chrome.storage.local.get(TASK_KEY))[TASK_KEY] || null;
 const getConversationTask = async conversationId => {
@@ -65,6 +66,49 @@ const finishCollectedList = async task => {
   return tellChat(task, "search_complete", task.lastMessage, true, { result: task.lastMessage, sourceUrl: task.pageUrl || "" });
 };
 
+async function watchNavigation(task) {
+  if (!task?.id || navigationWatchIds.has(task.id)) return;
+  navigationWatchIds.add(task.id);
+  try {
+    for (const delay of [200, 300, 450, 650, 900, 1200, 1600, 2200, 2800]) {
+      await sleep(delay);
+      const latest = await getTask();
+      if (!latest || latest.id !== task.id || latest.status !== "navigating" || turnStopped(latest.status)) return;
+      let tab;
+      try { tab = await chrome.tabs.get(latest.targetTabId); } catch (_) { continue; }
+      if (!/^https?:/i.test(tab.url || "")) continue;
+      let probe = null;
+      try {
+        probe = await chrome.tabs.sendMessage(latest.targetTabId, { type: "QYK_BROWSER_INSPECT" });
+      } catch (_) {
+        try {
+          await chrome.scripting.executeScript({ target: { tabId: latest.targetTabId }, files: ["content/browser-agent.js"] });
+          probe = await chrome.tabs.sendMessage(latest.targetTabId, { type: "QYK_BROWSER_INSPECT" });
+        } catch (_) {}
+      }
+      const sameDocument = probe?.url && probe.url === tab.url;
+      const usable = sameDocument && probe.readyState !== "loading" &&
+        (String(probe.text || "").length >= 120 || (probe.elements || []).length >= 2);
+      if (tab.status === "complete" || usable) {
+        latest.status = "acting";
+        latest.lastMessage = tab.status === "complete" ? "网页已加载，正在读取内容…" : "页面主要内容已可用，正在读取；无需等待其余资源…";
+        latest.updatedAt = Date.now();
+        await saveTask(latest);
+        await tellChat(latest, "inspecting", latest.lastMessage);
+        return requestPlan(latest);
+      }
+    }
+    const latest = await getTask();
+    if (!latest || latest.id !== task.id || latest.status !== "navigating") return;
+    latest.status = "acting";
+    latest.lastMessage = "页面完整加载超过 12 秒，正在读取当前可见内容继续处理…";
+    latest.updatedAt = Date.now();
+    await saveTask(latest);
+    await tellChat(latest, "inspecting", latest.lastMessage);
+    return requestPlan(latest);
+  } finally { navigationWatchIds.delete(task.id); }
+}
+
 async function tellChat(task, status, message, activate = false, extra = {}) {
   if (!task?.sourceTabId) return;
   try { await chrome.tabs.sendMessage(task.sourceTabId, { type: "QYK_STATUS", status, message, task, ...extra }); } catch (_) {}
@@ -80,13 +124,7 @@ async function ensureTarget(task) {
   task.targetTabId = tab.id;
   if (startUrl !== "about:blank") task.status = "navigating";
   await saveTask(task);
-  if (task.status === "navigating") setTimeout(async () => {
-    try {
-      const latest = await getTask();
-      const currentTab = latest?.targetTabId ? await chrome.tabs.get(latest.targetTabId) : null;
-      if (latest?.id === task.id && latest.status === "navigating" && currentTab?.status === "complete") await requestPlan(latest);
-    } catch (_) {}
-  }, 300); // 防止极快页面在任务状态落盘前已经触发 complete，导致漏掉首次规划。
+  if (task.status === "navigating") watchNavigation(task);
   return tab.id;
 }
 
@@ -175,6 +213,7 @@ async function afterAction(task, message = "页面已更新，正在继续分析
   if (tab.status === "loading") {
     latest.status = "navigating";
     await saveTask(latest);
+    watchNavigation(latest);
     return;
   }
   await requestPlan(latest);
@@ -490,6 +529,7 @@ chrome.tabs.onUpdated.addListener(async (tabId, info) => {
     task.status = "navigating";
     await saveTask(task);
     await tellChat(task, "navigating", "网页正在加载…");
+    watchNavigation(task);
     return;
   }
   if (info.status === "complete" && task.status === "navigating") {
@@ -504,6 +544,7 @@ chrome.tabs.onCreated.addListener(async tab => {
   task.targetTabId = tab.id;
   task.status = "navigating";
   await saveTask(task);
+  watchNavigation(task);
 });
 
 chrome.downloads.onCreated.addListener(async item => {

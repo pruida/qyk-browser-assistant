@@ -37,6 +37,7 @@
     }
     return {
       url: location.href, title: document.title,
+      readyState: document.readyState,
       text: clean(document.body?.innerText).slice(0, 6500), elements: rows,
       viewport: { width: innerWidth, height: innerHeight, scrollY: Math.round(scrollY), pageHeight: document.documentElement.scrollHeight }
     };
