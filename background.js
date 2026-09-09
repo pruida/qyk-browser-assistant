@@ -1,5 +1,5 @@
 const TASK_KEY = "activeTask";
-const MAX_STEPS = 30;
+const MAX_STEPS = 16;
 const planningTaskIds = new Set();
 const applyingPlanIds = new Set();
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -84,7 +84,9 @@ async function requestPlan(task) {
       await saveTask(task);
       return tellChat(task, task.status, task.lastMessage, true);
     }
-    task.forceFinalize = (task.steps || 0) >= MAX_STEPS - 1;
+    const exhaustive = /(?:所有|全部|尽可能完整|尽可能多|\ball\b|\bevery\b)/i.test(String(task.goal || ""));
+    const researchEnough = !exhaustive && (task.memory || []).length >= 10 && (task.steps || 0) >= 6;
+    task.forceFinalize = (task.steps || 0) >= MAX_STEPS - 1 || researchEnough;
     task.status = "inspecting";
     task.planId = crypto.randomUUID();
     task.planRequestedAt = Date.now();
@@ -120,7 +122,7 @@ async function afterAction(task, message = "页面已更新，正在继续分析
   current.updatedAt = Date.now();
   await saveTask(current);
   await tellChat(current, "acting", message);
-  await sleep(250);
+  await sleep(80);
   const latest = await getTask();
   if (!latest || latest.id !== task.id || turnStopped(latest.status)) return;
   const tab = await chrome.tabs.get(latest.targetTabId);
@@ -141,7 +143,7 @@ async function recoverPageConnection(task) {
   await saveTask(latest);
   await tellChat(latest, "acting", latest.lastMessage);
 
-  for (const delay of [400, 800, 1400, 2200, 3200]) {
+  for (const delay of [100, 250, 500, 900, 1500]) {
     await sleep(delay);
     latest = await getTask();
     if (!latest || latest.id !== task.id || turnStopped(latest.status)) return;
@@ -192,7 +194,7 @@ async function recoverActionFailure(task, reason) {
   latest.lastMessage = `当前操作不可用（${String(reason || "页面已变化").slice(0, 120)}），正在读取最新页面并改用其他路径…`;
   await saveTask(latest);
   await tellChat(latest, "acting", latest.lastMessage);
-  await sleep(700);
+  await sleep(150);
   latest = await getTask();
   if (!latest || latest.id !== task.id || turnStopped(latest.status)) return;
   return requestPlan(latest);
@@ -224,7 +226,7 @@ async function applyPlan(task, plan) {
     const key = String(item.url || item.id || item.title || JSON.stringify(item)).slice(0, 1000);
     if (!memory.some(x => String(x.url || x.id || x.title || JSON.stringify(x)).slice(0, 1000) === key)) memory.push(item);
   }
-  task.memory = memory.slice(-40);
+  task.memory = memory.slice(-24);
   const status = String(plan.status || "continue");
   const message = String(plan.message || plan.result || "浏览器任务状态已更新。").slice(0, 12000);
   if (status === "done") {
@@ -437,7 +439,7 @@ chrome.tabs.onUpdated.addListener(async (tabId, info) => {
     return;
   }
   if (info.status === "complete" && task.status === "navigating") {
-    await sleep(600);
+    await sleep(80);
     await requestPlan(task);
   }
 });

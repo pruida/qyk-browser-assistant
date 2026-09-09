@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "启源浏览器助手",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "description": "让 ai.qykaiwu.cn 在用户授权下通过 GPT-6 协助操作各类网站，并在关键步骤前交还控制。",
   "permissions": ["tabs", "storage", "alarms", "activeTab", "scripting", "downloads"],
   "host_permissions": [
