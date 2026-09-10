@@ -2,7 +2,7 @@
   if (window.__qykBrowserBridge) return;
   window.__qykBrowserBridge = true;
   const EXT_VERSION = "0.17.0";
-  let last = "", lastAt = 0;
+  let last = "", lastAt = 0, dismissTimer = 0;
   let progressTimer = 0, progressStarted = 0, progressMessage = "", progressStatus = "", progressHidden = false;
 
   const versionLt = (a, b) => {
@@ -34,7 +34,9 @@
     el.id = "qyk-browser-status";
     Object.assign(el.style, {
       position: "fixed", right: "18px", bottom: "88px", zIndex: "2147483647",
-      maxWidth: "340px", padding: "12px 36px 12px 14px", borderRadius: "12px",
+      boxSizing: "border-box", maxWidth: "min(360px, calc(100vw - 36px))",
+      maxHeight: "min(160px, 40vh)", overflow: "hidden",
+      padding: "12px 36px 12px 14px", borderRadius: "12px",
       background: "#111827", color: "white", boxShadow: "0 8px 28px #0004",
       font: "13px/1.5 -apple-system,BlinkMacSystemFont,'PingFang SC',sans-serif",
       display: "none"
@@ -43,6 +45,13 @@
     close.textContent = "×";
     Object.assign(close.style, { position: "absolute", right: "9px", top: "6px", border: "0", background: "none", color: "#fff", fontSize: "20px", cursor: "pointer" });
     close.onclick = () => { progressHidden = true; el.style.display = "none"; };
+    close.setAttribute("aria-label", "关闭提示");
+    const text = document.createElement("span");
+    Object.assign(text.style, {
+      display: "-webkit-box", WebkitBoxOrient: "vertical", WebkitLineClamp: "4",
+      overflow: "hidden", overflowWrap: "anywhere"
+    });
+    el.appendChild(text);
     el.appendChild(close);
     document.documentElement.appendChild(el);
     return el;
@@ -68,6 +77,7 @@
     el.style.display = "block";
   }
   function show(message, status) {
+    clearTimeout(dismissTimer);
     progressHidden = false;
     const el = panel();
     let text = el.querySelector("span");
@@ -79,8 +89,10 @@
       progressTimer = setInterval(paintProgress, 1000);
       return;
     }
-    text.textContent = `${status === "error" ? "⚠️" : "✈️"} ${message}`;
+    const summary = String(message || "").replace(/\s+/g, " ").trim();
+    text.textContent = `${status === "error" ? "⚠️" : "✈️"} ${summary.length > 180 ? summary.slice(0, 180) + "…" : summary}`;
     el.style.display = "block";
+    dismissTimer = setTimeout(() => { el.style.display = "none"; }, 4000);
   }
 
   async function submit(text, requestId, conversationId) {
