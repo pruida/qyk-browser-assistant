@@ -1,7 +1,7 @@
 (() => {
   if (window.__qykBrowserBridge) return;
   window.__qykBrowserBridge = true;
-  const EXT_VERSION = "0.17.0";
+  const EXT_VERSION = "0.18.0";
   let last = "", lastAt = 0, dismissTimer = 0;
   let progressTimer = 0, progressStarted = 0, progressMessage = "", progressStatus = "", progressHidden = false;
 
@@ -65,6 +65,9 @@
       acting: "正在执行网页操作", reconnecting: "网页跳转中，正在重新连接", downloading: "正在等待下载开始"
     }[status] || message || "正在处理浏览器任务";
     const dots = ".".repeat((elapsed % 3) + 1);
+    if (elapsed >= 45 && ["planning_required", "planning"].includes(status)) {
+      return `${phase}${dots} 已等待 ${elapsed} 秒，正在自动结束本次等待`;
+    }
     return elapsed >= 20 ? `${phase}${dots} 已等待 ${elapsed} 秒，仍在处理，并非卡死` : `${phase}${dots} ${elapsed} 秒`;
   }
   function paintProgress() {
