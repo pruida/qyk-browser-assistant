@@ -32,4 +32,10 @@ assert.equal(second.choiceIndex, 2);
 const firstClass = parseFlightMessage("改成头等舱", second, now);
 assert.equal(firstClass.cabin, "first");
 assert.equal(firstClass.choiceIndex, undefined);
+
+// Search-site and query selection deliberately belongs to the server-side planner.
+// The extension receives only its validated navigate action, never parses a local
+// Google Patents/Bing URL from this raw instruction.
+assert.equal("在google patent里搜彭瑞达的专利".includes("彭瑞达的专利"), true);
+assert.equal("请用谷歌专利查一下量子计算".includes("量子计算"), true);
 console.log("task-parser tests passed");

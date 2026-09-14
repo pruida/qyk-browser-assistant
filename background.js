@@ -43,23 +43,6 @@ const browserIntent = text => {
 };
 const exhaustiveGoal = text => /(?:所有|全部|尽可能完整|尽可能多|\ball\b|\bevery\b)/i.test(String(text || ""));
 const fastListGoal = text => /(?:热门|热度|Top|排行|列表|合集|汇总)/i.test(String(text || ""));
-const initialUrlFor = text => {
-  const raw = String(text || "").trim();
-  const direct = raw.match(/https?:\/\/[^\s，。；]+/i)?.[0];
-  if (direct) return direct;
-  // Respect an explicitly named destination. Previously every natural-language task
-  // was bootstrapped through Bing, even when the user said “在 Google Patents 里搜索”.
-  if (/(?:Google\s*Patents?|谷歌专利)/i.test(raw)) {
-    const query = raw
-      .replace(/(?:请|麻烦|帮我|给我|替我)/g, " ")
-      .replace(/(?:在|用)?\s*(?:Google\s*Patents?|谷歌专利)(?:网站|官网|里|上|中)?/ig, " ")
-      .replace(/(?:搜索一下|搜一下|查询一下|查一下|查找一下|检索一下|搜索|查询|查找|检索|查看|看看|看下)/g, " ")
-      .replace(/^[\s，。；、:：]+|[\s，。；、:：]+$/g, "")
-      .replace(/\s+/g, " ");
-    return `https://patents.google.com/?q=${encodeURIComponent((query || raw).slice(0, 500))}`;
-  }
-  return browserIntent(raw) ? `https://www.bing.com/search?q=${encodeURIComponent(raw.slice(0, 500))}` : "about:blank";
-};
 const mdText = value => String(value || "").replace(/[\[\]*_`]/g, "").trim();
 const finishCollectedList = async task => {
   const items = (task.memory || []).slice(0, 10);
@@ -131,12 +114,11 @@ async function ensureTarget(task) {
   if (task.targetTabId) {
     try { await chrome.tabs.get(task.targetTabId); return task.targetTabId; } catch (_) {}
   }
-  const startUrl = initialUrlFor(task.instruction || task.goal);
-  const tab = await chrome.tabs.create({ url: startUrl, active: true });
+  // 首个外部网页也必须由 GPT-6 根据完整任务选择。这里仅创建中性标签页，
+  // 禁止从站点名或关键词派生 Bing/Google Patents 等猜测地址。
+  const tab = await chrome.tabs.create({ url: "about:blank", active: true });
   task.targetTabId = tab.id;
-  if (startUrl !== "about:blank") task.status = "navigating";
   await saveTask(task);
-  if (task.status === "navigating") watchNavigation(task);
   return tab.id;
 }
 
@@ -482,8 +464,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       // finish makes the chat page mistake an installed extension for a missing one.
       sendResponse({ accepted: true, task });
       await ensureTarget(task);
-      await tellChat(task, "ready", "通用浏览器助手已接管，正在理解任务…");
-      if (task.status !== "navigating") await requestPlan(task);
+      await tellChat(task, "ready", "通用浏览器助手已接管，正在理解任务并规划首个网页…");
+      await requestPlan(task);
       return;
     }
     if (msg?.type === "QYK_BROWSER_PLAN_RESULT") {
