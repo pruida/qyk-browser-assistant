@@ -37,16 +37,28 @@ const turnStopped = status => ["search_complete", "needs_user", "cancelled", "er
 const browserIntent = text => {
   const t = String(text || "").trim();
   return /https?:\/\//i.test(t) ||
-    /(?:打开|访问|进入|浏览|操作|点击|填写|上传|下载|登录|注册|预订|订票|订房|下单|购买|比价|搜索|搜一下|查一下|查询|查找|检索|查看|看看|看下).{0,40}(?:网站|网页|官网|页面|站点|论坛|社区|博客|新闻|帖子|文章|动态|携程|淘宝|天猫|京东|百度|知乎|微博|航班|酒店|商品|订单)/.test(t) ||
-    /(?:在|用).{0,24}(?:网站|官网|站点|论坛|社区|博客|携程|淘宝|天猫|京东|百度|知乎|微博).{0,24}(?:找|查|搜|看|买|订|填|打开|操作)/.test(t) ||
+    /(?:打开|访问|进入|浏览|操作|点击|填写|上传|下载|登录|注册|预订|订票|订房|下单|购买|比价|搜索|搜一下|查一下|查询|查找|检索|查看|看看|看下).{0,40}(?:网站|网页|官网|页面|站点|论坛|社区|博客|新闻|帖子|文章|动态|携程|淘宝|天猫|京东|百度|知乎|微博|Google\s*Patents?|谷歌专利|专利|航班|酒店|商品|订单)/i.test(t) ||
+    /(?:在|用).{0,24}(?:网站|官网|站点|论坛|社区|博客|携程|淘宝|天猫|京东|百度|知乎|微博|Google\s*Patents?|谷歌专利).{0,24}(?:找|查|搜|看|买|订|填|打开|操作)/i.test(t) ||
     /帮我.{0,40}(?:打开|查看|看看|看下|查找|检索|查|搜|买|订|定|填|登录|下载|上传)/.test(t);
 };
 const exhaustiveGoal = text => /(?:所有|全部|尽可能完整|尽可能多|\ball\b|\bevery\b)/i.test(String(text || ""));
 const fastListGoal = text => /(?:热门|热度|Top|排行|列表|合集|汇总)/i.test(String(text || ""));
 const initialUrlFor = text => {
-  const direct = String(text || "").match(/https?:\/\/[^\s，。；]+/i)?.[0];
+  const raw = String(text || "").trim();
+  const direct = raw.match(/https?:\/\/[^\s，。；]+/i)?.[0];
   if (direct) return direct;
-  return browserIntent(text) ? `https://www.bing.com/search?q=${encodeURIComponent(String(text || "").slice(0, 500))}` : "about:blank";
+  // Respect an explicitly named destination. Previously every natural-language task
+  // was bootstrapped through Bing, even when the user said “在 Google Patents 里搜索”.
+  if (/(?:Google\s*Patents?|谷歌专利)/i.test(raw)) {
+    const query = raw
+      .replace(/(?:请|麻烦|帮我|给我|替我)/g, " ")
+      .replace(/(?:在|用)?\s*(?:Google\s*Patents?|谷歌专利)(?:网站|官网|里|上|中)?/ig, " ")
+      .replace(/(?:搜索一下|搜一下|查询一下|查一下|查找一下|检索一下|搜索|查询|查找|检索|查看|看看|看下)/g, " ")
+      .replace(/^[\s，。；、:：]+|[\s，。；、:：]+$/g, "")
+      .replace(/\s+/g, " ");
+    return `https://patents.google.com/?q=${encodeURIComponent((query || raw).slice(0, 500))}`;
+  }
+  return browserIntent(raw) ? `https://www.bing.com/search?q=${encodeURIComponent(raw.slice(0, 500))}` : "about:blank";
 };
 const mdText = value => String(value || "").replace(/[\[\]*_`]/g, "").trim();
 const finishCollectedList = async task => {
@@ -465,10 +477,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         updatedAt: Date.now()
       };
       await saveTask(task);
+      // ACK as soon as the durable task exists.  ensureTarget/requestPlan can include
+      // tab navigation and a slow model call; holding the message response until they
+      // finish makes the chat page mistake an installed extension for a missing one.
+      sendResponse({ accepted: true, task });
       await ensureTarget(task);
       await tellChat(task, "ready", "通用浏览器助手已接管，正在理解任务…");
       if (task.status !== "navigating") await requestPlan(task);
-      return sendResponse({ accepted: true, task });
+      return;
     }
     if (msg?.type === "QYK_BROWSER_PLAN_RESULT") {
       const initial = await getTask();
