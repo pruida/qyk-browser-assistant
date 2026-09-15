@@ -34,9 +34,15 @@ const safeFilename = (name, url = "") => {
 
 const isTerminal = status => ["cancelled", "error"].includes(status);
 const turnStopped = status => ["search_complete", "needs_user", "cancelled", "error"].includes(status);
+const patentBrowserIntent = text => {
+  const t = String(text || "").trim();
+  return /(?:智慧芽|PatSnap|Google\s*Patents?|谷歌专利)/i.test(t) ||
+    /(?:外观|设计)?专利.{0,40}(?:检索|搜索|查询|查找|以图搜图|相似|报告)/i.test(t) ||
+    /(?:检索|搜索|查询|查找|以图搜图|生成|制作).{0,40}(?:外观|设计)?专利/i.test(t);
+};
 const browserIntent = text => {
   const t = String(text || "").trim();
-  return /https?:\/\//i.test(t) ||
+  return patentBrowserIntent(t) || /https?:\/\//i.test(t) ||
     /(?:打开|访问|进入|浏览|操作|点击|填写|上传|下载|登录|注册|预订|订票|订房|下单|购买|比价|搜索|搜一下|查一下|查询|查找|检索|查看|看看|看下).{0,40}(?:网站|网页|官网|页面|站点|论坛|社区|博客|新闻|帖子|文章|动态|携程|淘宝|天猫|京东|百度|知乎|微博|Google\s*Patents?|谷歌专利|专利|航班|酒店|商品|订单)/i.test(t) ||
     /(?:在|用).{0,24}(?:网站|官网|站点|论坛|社区|博客|携程|淘宝|天猫|京东|百度|知乎|微博|Google\s*Patents?|谷歌专利).{0,24}(?:找|查|搜|看|买|订|填|打开|操作)/i.test(t) ||
     /帮我.{0,40}(?:打开|查看|看看|看下|查找|检索|查|搜|买|订|定|填|登录|下载|上传)/.test(t);

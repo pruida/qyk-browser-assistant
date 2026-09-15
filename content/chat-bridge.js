@@ -1,7 +1,7 @@
 (() => {
   if (window.__qykBrowserBridge) return;
   window.__qykBrowserBridge = true;
-  const EXT_VERSION = "0.19.4";
+  const EXT_VERSION = "0.19.5";
   let last = "", lastAt = 0, dismissTimer = 0;
   let progressTimer = 0, progressStarted = 0, progressMessage = "", progressStatus = "", progressHidden = false;
 

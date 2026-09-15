@@ -18,7 +18,7 @@
 - 一台 Windows 或 macOS 电脑；
 - Google Chrome 浏览器；
 - 能正常打开 [ai.qykaiwu.cn](https://ai.qykaiwu.cn/)；
-- 插件压缩包。可从 [GitHub Releases](https://github.com/pruida/qyk-browser-assistant/releases/latest) 下载最新版，也可以使用 [官网下载链接](https://ai.qykaiwu.cn/static/qyk-browser-assistant-v0.19.0.zip)。
+- 插件压缩包。可从 [GitHub Releases](https://github.com/pruida/qyk-browser-assistant/releases/latest) 下载最新版，也可以使用 [官网下载链接](https://ai.qykaiwu.cn/static/qyk-browser-assistant-v0.19.5.zip)。
 
 手机 Chrome 暂不支持这种安装方式。
 
@@ -26,7 +26,7 @@
 
 ### 第 1 步：下载并解压
 
-1. 下载 `qyk-browser-assistant-v0.19.0.zip`。
+1. 下载 `qyk-browser-assistant-v0.19.5.zip`。
 2. 找到下载的 ZIP 文件。
 3. Windows：右键文件，选择“全部解压”。
 4. macOS：双击 ZIP 文件即可解压。
