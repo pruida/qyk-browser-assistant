@@ -1,7 +1,7 @@
 (() => {
   if (window.__qykBrowserBridge) return;
   window.__qykBrowserBridge = true;
-  const EXT_VERSION = "0.19.0";
+  const EXT_VERSION = "0.19.4";
   let last = "", lastAt = 0, dismissTimer = 0;
   let progressTimer = 0, progressStarted = 0, progressMessage = "", progressStatus = "", progressHidden = false;
 
@@ -65,7 +65,7 @@
       acting: "正在执行网页操作", reconnecting: "网页跳转中，正在重新连接", downloading: "正在等待下载开始"
     }[status] || message || "正在处理浏览器任务";
     const dots = ".".repeat((elapsed % 3) + 1);
-    if (elapsed >= 45 && ["planning_required", "planning"].includes(status)) {
+    if (elapsed >= 80 && ["planning_required", "planning"].includes(status)) {
       return `${phase}${dots} 已等待 ${elapsed} 秒，正在自动结束本次等待`;
     }
     return elapsed >= 20 ? `${phase}${dots} 已等待 ${elapsed} 秒，仍在处理，并非卡死` : `${phase}${dots} ${elapsed} 秒`;
@@ -98,14 +98,14 @@
     dismissTimer = setTimeout(() => { el.style.display = "none"; }, 4000);
   }
 
-  async function submit(text, requestId, conversationId) {
+  async function submit(text, requestId, conversationId, chatContext = []) {
     text = String(text || "").trim();
     if (!text || (text === last && Date.now() - lastAt < 400 && !requestId)) return { accepted: false };
     last = text; lastAt = Date.now();
     // 聊天页不再独占意图判断：每条消息先由插件结合该会话上下文做本地轻量判断。
     const check = await chrome.runtime.sendMessage({
       type: "QYK_BROWSER_SHOULD_HANDLE", text,
-      conversationId: conversationId || location.hash.replace(/^#/, "")
+      conversationId: conversationId || location.hash.replace(/^#/, ""), chatContext
     }).catch(() => ({ candidate: false }));
     if (!check?.candidate) return { accepted: false, candidate: false };
     // 每次真正启动浏览器任务前都从服务器重新取版本；这样聊天页长期不刷新也能发现新版本。
@@ -120,7 +120,7 @@
     }
     return chrome.runtime.sendMessage({
       type: "QYK_CHAT_MESSAGE", text,
-      conversationId: conversationId || location.hash.replace(/^#/, "")
+      conversationId: conversationId || location.hash.replace(/^#/, ""), chatContext
     }).then(r => {
       if (r?.accepted) show("浏览器助手已接管，本条消息不会再交给服务器浏览器。", "accepted");
       return r || { accepted: false };
@@ -130,7 +130,7 @@
   // 页面主动发起并等待 ACK。旧版监听 click/keydown 会让原聊天和扩展各跑一次，已移除。
   document.addEventListener("qyk-browser-command", async e => {
     const d = e.detail || {};
-    const result = await submit(d.text, d.requestId, d.conversationId);
+    const result = await submit(d.text, d.requestId, d.conversationId, d.chatContext);
     document.dispatchEvent(new CustomEvent("qyk-browser-command-result", {
       detail: { requestId: d.requestId, ...result }
     }));
@@ -160,7 +160,7 @@
   const conversationId = location.hash.replace(/^#/, "");
   chrome.runtime.sendMessage({ type: "QYK_GET_CHAT_TASK", conversationId }).then(r => {
     document.dispatchEvent(new CustomEvent("qyk-browser-ready", {
-      detail: { version: EXT_VERSION, activeTask: !!r?.task }
+      detail: { version: EXT_VERSION, activeTask: !!r?.task, taskStatus: r?.task?.status || '' }
     }));
   }).catch(() => {
     document.dispatchEvent(new CustomEvent("qyk-browser-ready", { detail: { version: EXT_VERSION, activeTask: false } }));

@@ -41,8 +41,29 @@ const browserIntent = text => {
     /(?:在|用).{0,24}(?:网站|官网|站点|论坛|社区|博客|携程|淘宝|天猫|京东|百度|知乎|微博|Google\s*Patents?|谷歌专利).{0,24}(?:找|查|搜|看|买|订|填|打开|操作)/i.test(t) ||
     /帮我.{0,40}(?:打开|查看|看看|看下|查找|检索|查|搜|买|订|定|填|登录|下载|上传)/.test(t);
 };
+// A prior browser task is context, not blanket permission to intercept every later
+// message. Content transformations belong to normal chat unless the message also
+// explicitly asks to read/open/search a webpage.
+const contentOnlyIntent = text => /(?:总结|概括|归纳|提炼|翻译|改写|润色|续写|扩写|缩写|撰写|写作|讲解|回答|校对|纠错|解释|评价|评论|分类|排序|筛选|写成|整理成|排版|转换格式|列出要点|提取要点)/i.test(String(text || ""));
+const contextualBrowserFollowup = text => {
+  const t = String(text || "").trim();
+  return continuationOnly(t) ||
+    /^(?:补充(?:一下|下)?|再补充|继续查|继续搜|接着查|接着搜|再查|再搜|多找|多查|再来(?:几|些)|换个(?:网站|网页|来源)|下一页|上一页|打开第|点开第|看看第|查看第)/i.test(t) ||
+    /^(?:还有没有|有没有遗漏|还有哪些|还漏了哪些)/i.test(t);
+};
+const compactChatContext = rows => (Array.isArray(rows) ? rows : []).slice(-40).map(row => ({
+  role: String(row?.role || "").slice(0, 20),
+  text: String(row?.text || row?.content || "").slice(0, 1200)
+})).filter(row => row.role && row.text);
+const answersBrowserClarification = (task, text, chatContext = []) => {
+  if (!task || task.status !== "needs_user" || contentOnlyIntent(text)) return false;
+  const latestAssistant = [...compactChatContext(chatContext)].reverse().find(row => row.role === "assistant")?.text || "";
+  const question = String(task.lastMessage || latestAssistant).trim();
+  return String(text || "").trim().length <= 160 && !!question && /[？?]|你想|请选择|请确认|需要你|还是/.test(question);
+};
 const exhaustiveGoal = text => /(?:所有|全部|尽可能完整|尽可能多|\ball\b|\bevery\b)/i.test(String(text || ""));
 const fastListGoal = text => /(?:热门|热度|Top|排行|列表|合集|汇总)/i.test(String(text || ""));
+const continuationOnly = text => /^(?:继续|接着|接着做|继续查|继续搜索|继续操作|重试|再试一次)[。！!,.，\s]*$/i.test(String(text || "").trim());
 const mdText = value => String(value || "").replace(/[\[\]*_`]/g, "").trim();
 const finishCollectedList = async task => {
   const items = (task.memory || []).slice(0, 10);
@@ -58,7 +79,7 @@ const finishCollectedList = async task => {
   task.lastMessage = `已从当前可访问页面收集并整理 ${items.length} 个高相关结果：\n\n${lines.join("\n\n")}\n\n以上按页面可见热度证据整理；请打开来源链接核对实时数据。`;
   task.updatedAt = Date.now();
   await saveTask(task);
-  return tellChat(task, "search_complete", task.lastMessage, true, { result: task.lastMessage, sourceUrl: task.pageUrl || "" });
+  return tellChat(task, "search_complete", task.lastMessage, true, { result: task.lastMessage, sourceUrl: task.pageUrl || "", results: (task.memory || []).slice(0, 20) });
 };
 
 async function watchNavigation(task) {
@@ -315,7 +336,7 @@ async function applyPlan(task, plan) {
     task.status = "search_complete";
     task.lastMessage = message;
     await saveTask(task);
-    return tellChat(task, task.status, message, true, { result: plan.result || message, sourceUrl: task.pageUrl || "" });
+    return tellChat(task, task.status, message, true, { result: plan.result || message, sourceUrl: task.pageUrl || "", results: task.memory });
   }
   if (status === "needs_user") {
     task.status = "needs_user";
@@ -327,7 +348,7 @@ async function applyPlan(task, plan) {
   const type = String(action.type || "");
   const signature = JSON.stringify([task.pageFingerprint || task.pageUrl || "", type, action.url || "", action.elementId || "", action.text || action.value || action.key || ""]);
   if (["navigate", "click", "fill", "select", "press", "back", "download"].includes(type) &&
-      (task.actionHistory || []).some(x => x.taskId === task.id && x.signature === signature)) {
+      (task.actionHistory || []).some(x => x.signature === signature)) {
     if (type === "download") {
       task.status = "needs_user";
       task.lastMessage = "已阻止同一文件的重复下载。";
@@ -360,7 +381,7 @@ async function applyPlan(task, plan) {
     task.lastMessage = `已开始下载“${filename}”，本轮操作已结束，不会重复下载。`;
     task.downloadId = downloadId;
     await saveTask(task);
-    return tellChat(task, "search_complete", task.lastMessage, true, { result: task.lastMessage, sourceUrl: task.pageUrl || "" });
+    return tellChat(task, "search_complete", task.lastMessage, true, { result: task.lastMessage, sourceUrl: task.pageUrl || "", results: (task.memory || []).slice(0, 20) });
   }
   if (type === "navigate") {
     let url;
@@ -409,7 +430,7 @@ async function applyPlan(task, plan) {
     task.status = "search_complete";
     task.lastMessage = `已开始下载${result.filename ? `“${result.filename}”` : "文件"}，本轮操作已结束，不会重复下载。`;
     await saveTask(task);
-    return tellChat(task, "search_complete", task.lastMessage, true, { result: task.lastMessage, sourceUrl: task.pageUrl || "" });
+    return tellChat(task, "search_complete", task.lastMessage, true, { result: task.lastMessage, sourceUrl: task.pageUrl || "", results: (task.memory || []).slice(0, 20) });
   }
   await afterAction(task, message);
 }
@@ -419,13 +440,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg?.type === "QYK_BROWSER_SHOULD_HANDLE") {
       const conversationId = String(msg.conversationId || "");
       const old = await getConversationTask(conversationId);
-      return sendResponse({ candidate: !!(old && !isTerminal(old.status)) || browserIntent(msg.text) });
+      const explicit = browserIntent(msg.text);
+      const contextual = !!(old && !isTerminal(old.status) && !contentOnlyIntent(msg.text) && contextualBrowserFollowup(msg.text));
+      const clarification = answersBrowserClarification(old, msg.text, msg.chatContext);
+      return sendResponse({ candidate: explicit || contextual || clarification });
     }
     if (msg?.type === "QYK_CHAT_MESSAGE") {
       const conversationId = String(msg.conversationId || "");
       const old = await getConversationTask(conversationId);
       const sameChat = old && old.conversationId === conversationId && old.sourceTabId === sender.tab?.id && !isTerminal(old.status);
       const text = String(msg.text || "").trim();
+      const chatContext = compactChatContext(msg.chatContext);
+      const answeringClarification = sameChat && answersBrowserClarification(old, text, chatContext);
       if (sameChat && /^(?:取消|停止|结束|不做了|算了)(?:浏览器|这个任务|操作)?/.test(text)) {
         old.status = "cancelled";
         old.updatedAt = Date.now();
@@ -436,13 +462,25 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       if (!sameChat && !browserIntent(text)) return sendResponse({ accepted: false });
       const legacyGoal = sameChat && !old.goal ?
         `在携程处理机票任务：${old.from || ""}到${old.to || ""}，${old.departDate || ""}，${old.cabin || ""}，${old.preference || ""}` : "";
+      // “继续”只表示恢复上一轮，不能把“只查机器之心”之类的具体修正覆盖掉。
+      // 否则规划器只剩最初总目标，会重新走已经抓过的网站，看起来像无限循环。
+      const resuming = sameChat && continuationOnly(text);
+      const priorGoal = old?.instruction || old?.goal || legacyGoal || text;
+      const clarifiedGoal = `${priorGoal}\n用户对上一轮澄清问题的回答：${text}`;
+      const instruction = answeringClarification ? clarifiedGoal : (resuming ? priorGoal : text);
       const task = {
         ...(sameChat ? old : {}),
         id: crypto.randomUUID(),
         sessionId: sameChat ? (old.sessionId || old.id) : crypto.randomUUID(),
         kind: "browser",
-        goal: sameChat ? (old.goal || legacyGoal || old.instruction || text) : text,
-        instruction: text,
+        // A concrete follow-up is a new goal over the retained browser memory. Keeping the
+        // first search goal here made “summarize these articles” continue that search loop.
+        // A bare “继续” must still resume the interrupted goal.
+        // Prefer the last concrete instruction for backward compatibility with tasks
+        // created by v0.19.1, whose goal may still contain the conversation's first search.
+        goal: answeringClarification ? clarifiedGoal : (resuming ? priorGoal : text),
+        instruction,
+        chatContext,
         turns: [...(sameChat ? (old.turns || []) : []), { text, at: Date.now() }].slice(-12),
         sourceTabId: sender.tab.id,
         sourceUrl: sender.tab.url,
@@ -450,7 +488,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         status: "ready",
         steps: 0,
         memory: sameChat ? (old.memory || []) : [],
-        actionHistory: sameChat ? (old.actionHistory || []) : [],
+        // Old signatures prevent duplicate actions during a retry. A new follow-up may
+        // legitimately revisit an article that the preceding search opened.
+        actionHistory: (resuming || answeringClarification) ? (old.actionHistory || []) : [],
         downloadKeys: [],
         pendingFilename: "",
         planFailures: 0,
@@ -522,7 +562,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
 chrome.tabs.onUpdated.addListener(async (tabId, info) => {
   const task = await getTask();
-  if (!task || task.targetTabId !== tabId || isTerminal(task.status)) return;
+  // search_complete/needs_user 是本轮的停止态，只能由用户的新消息恢复。
+  // 新闻站和搜索页常在后台刷新资源；不能让一次 onUpdated 把停止态改回 navigating。
+  if (!task || task.targetTabId !== tabId || turnStopped(task.status)) return;
   if (info.status === "loading") {
     task.status = "navigating";
     await saveTask(task);
@@ -538,7 +580,7 @@ chrome.tabs.onUpdated.addListener(async (tabId, info) => {
 
 chrome.tabs.onCreated.addListener(async tab => {
   const task = await getTask();
-  if (!task || tab.openerTabId !== task.targetTabId || isTerminal(task.status)) return;
+  if (!task || tab.openerTabId !== task.targetTabId || turnStopped(task.status)) return;
   task.targetTabId = tab.id;
   task.status = "navigating";
   await saveTask(task);
